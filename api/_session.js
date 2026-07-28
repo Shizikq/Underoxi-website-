@@ -1,60 +1,57 @@
-/**
- * Shared session store for Vercel serverless functions.
- * Uses a global in-memory store (per-instance).
- * In production with multiple instances, consider using Redis or Vercel KV.
+﻿/**
+ * Signed cookie sessions for Vercel serverless.
+ * No in-memory store — works across all function instances.
  */
 const crypto = require('crypto');
 
-// Global session store (persists across warm function invocations)
-if (!global.__sessionStore) {
-  global.__sessionStore = new Map();
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+function getSecret() {
+  return process.env.SESSION_SECRET || process.env.OWNER_PASSWORD_HASH || 'underoxi-fallback-secret';
 }
 
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-function generateSessionId() {
-  return crypto.randomBytes(32).toString('hex');
+function sign(payload) {
+  return crypto.createHmac('sha256', getSecret()).update(payload).digest('hex');
 }
 
 function createSession() {
-  const sessionId = generateSessionId();
-  const session = {
-    id: sessionId,
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+  const payload = 'owner.' + expiresAt;
+  const sig = sign(payload);
+  const token = payload + '.' + sig;
+  return {
+    id: token,
     createdAt: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL_MS,
+    expiresAt: expiresAt,
     data: { authenticated: true, role: 'owner' }
   };
-  global.__sessionStore.set(sessionId, session);
-  return session;
 }
 
 function getSession(sessionId) {
-  if (!sessionId) return null;
-  const session = global.__sessionStore.get(sessionId);
-  if (!session) return null;
-  if (Date.now() > session.expiresAt) {
-    global.__sessionStore.delete(sessionId);
+  if (!sessionId || typeof sessionId !== 'string') return null;
+  const parts = sessionId.split('.');
+  if (parts.length !== 3) return null;
+  const role = parts[0];
+  const expiresAt = parseInt(parts[1], 10);
+  const sig = parts[2];
+  if (role !== 'owner' || !expiresAt || !sig) return null;
+  if (Date.now() > expiresAt) return null;
+  const payload = role + '.' + expiresAt;
+  const expected = sign(payload);
+  try {
+    const a = Buffer.from(sig, 'hex');
+    const b = Buffer.from(expected, 'hex');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  } catch (e) {
     return null;
   }
-  return session;
+  return {
+    id: sessionId,
+    expiresAt: expiresAt,
+    data: { authenticated: true, role: 'owner' }
+  };
 }
 
-function destroySession(sessionId) {
-  if (sessionId) {
-    global.__sessionStore.delete(sessionId);
-  }
-}
-
-function cleanupExpiredSessions() {
-  const now = Date.now();
-  for (const [id, session] of global.__sessionStore.entries()) {
-    if (now > session.expiresAt) {
-      global.__sessionStore.delete(id);
-    }
-  }
-}
-
-// Run cleanup every hour
-setInterval(cleanupExpiredSessions, 60 * 60 * 1000);
+function destroySession() {}
 
 module.exports = { createSession, getSession, destroySession };
