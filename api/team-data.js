@@ -5,7 +5,7 @@
  * Данные хранятся в team-data.json в GitHub репозитории.
  * Для записи используется GitHub Personal Access Token из переменной окружения.
  */
-const cookie = require('cookie');
+const cookie = require('./_cookies');
 const { getSession, destroySession } = require('./_session');
 
 // ── GitHub helper ──────────────────────────────────────────────
